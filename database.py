@@ -234,6 +234,81 @@ class Database:
             logger.error(f"Ошибка поиска гостей: {e}")
             return []
 
+    def update_guest(self, guest_id: int, full_name: str, phone: str = "", email: str = "") -> bool:
+        """Обновление данных гостя"""
+        try:
+            if not full_name or not full_name.strip():
+                logger.warning("Попытка обновить гостя без имени")
+                return False
+            
+            self.cursor.execute(
+                "UPDATE guests SET full_name = ?, phone_number = ?, email = ? WHERE id = ?",
+                (full_name.strip(), phone.strip(), email.strip(), guest_id)
+            )
+            self.conn.commit()
+            logger.info(f"Гость #{guest_id} обновлен")
+            return True
+        except sqlite3.Error as e:
+            logger.error(f"Ошибка обновления гостя: {e}")
+            self.conn.rollback()
+            return False
+
+    def delete_guest(self, guest_id: int) -> bool:
+        """Удаление гостя (если нет активных броней)"""
+        try:
+            # Проверка активных броней
+            self.cursor.execute(
+                "SELECT COUNT(*) FROM bookings WHERE guest_id = ? AND status = ?",
+                (guest_id, self.BOOKING_STATUS_ACTIVE)
+            )
+            if self.cursor.fetchone()[0] > 0:
+                logger.warning(f"Нельзя удалить гостя #{guest_id} - есть активные брони")
+                return False
+            
+            self.cursor.execute("DELETE FROM guests WHERE id = ?", (guest_id,))
+            self.conn.commit()
+            logger.info(f"Гость #{guest_id} удален")
+            return True
+        except sqlite3.Error as e:
+            logger.error(f"Ошибка удаления гостя: {e}")
+            self.conn.rollback()
+            return False
+
+    def get_guest_by_id(self, guest_id: int) -> Optional[Tuple]:
+        """Получение гостя по ID"""
+        try:
+            self.cursor.execute(
+                "SELECT id, full_name, phone_number, email FROM guests WHERE id = ?",
+                (guest_id,)
+            )
+            return self.cursor.fetchone()
+        except sqlite3.Error as e:
+            logger.error(f"Ошибка получения гостя #{guest_id}: {e}")
+            return None
+
+    def get_guest_bookings_count(self, guest_id: int) -> Tuple[int, int]:
+        """
+        Получение статистики броней гостя
+        Возвращает (всего броней, активных броней)
+        """
+        try:
+            self.cursor.execute(
+                "SELECT COUNT(*) FROM bookings WHERE guest_id = ?",
+                (guest_id,)
+            )
+            total = self.cursor.fetchone()[0]
+            
+            self.cursor.execute(
+                "SELECT COUNT(*) FROM bookings WHERE guest_id = ? AND status = ?",
+                (guest_id, self.BOOKING_STATUS_ACTIVE)
+            )
+            active = self.cursor.fetchone()[0]
+            
+            return total, active
+        except sqlite3.Error as e:
+            logger.error(f"Ошибка получения статистики гостя: {e}")
+            return 0, 0
+
     # --- Booking Methods ---
     def create_booking(self, room_id: int, guest_id: int, check_in: str, 
                       check_out: str, total_price: float) -> Optional[int]:

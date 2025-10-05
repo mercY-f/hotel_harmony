@@ -2,6 +2,171 @@ import customtkinter as ctk
 from tkinter import ttk, messagebox
 from utils import validate_phone, validate_email, format_phone
 
+
+class EditGuestDialog(ctk.CTkToplevel):
+    """Диалог редактирования гостя"""
+    def __init__(self, master, db, guest_data, on_close_callback):
+        super().__init__(master)
+        self.db = db
+        self.guest_data = guest_data
+        self.on_close_callback = on_close_callback
+
+        self.title(f"Редактировать гостя #{guest_data[0]}")
+        self.geometry("400x500")
+        self.transient(master)
+        self.grab_set()
+        
+        # Заголовок
+        ctk.CTkLabel(
+            self, 
+            text=f"Гость #{guest_data[0]}", 
+            font=ctk.CTkFont(size=20, weight="bold")
+        ).pack(padx=20, pady=(20, 10))
+
+        # ФИО
+        self.name_label = ctk.CTkLabel(self, text="ФИО: *")
+        self.name_label.pack(padx=20, pady=(10, 5), anchor="w")
+        self.name_entry = ctk.CTkEntry(self, width=300)
+        self.name_entry.insert(0, guest_data[1])
+        self.name_entry.pack(padx=20, pady=5)
+
+        # Телефон
+        self.phone_label = ctk.CTkLabel(self, text="Номер телефона:")
+        self.phone_label.pack(padx=20, pady=(10, 5), anchor="w")
+        self.phone_entry = ctk.CTkEntry(self, width=300)
+        self.phone_entry.insert(0, guest_data[2] or "")
+        self.phone_entry.pack(padx=20, pady=5)
+
+        # Email
+        self.email_label = ctk.CTkLabel(self, text="Email:")
+        self.email_label.pack(padx=20, pady=(10, 5), anchor="w")
+        self.email_entry = ctk.CTkEntry(self, width=300)
+        self.email_entry.insert(0, guest_data[3] or "")
+        self.email_entry.pack(padx=20, pady=5)
+        
+        # Подсказка
+        ctk.CTkLabel(
+            self, 
+            text="* - обязательные поля", 
+            font=ctk.CTkFont(size=10),
+            text_color="gray"
+        ).pack(padx=20, pady=(10, 5))
+
+        # Кнопки
+        self.button_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.button_frame.pack(padx=20, pady=20, fill="x")
+        
+        self.delete_button = ctk.CTkButton(
+            self.button_frame,
+            text="Удалить",
+            command=self.delete_guest,
+            fg_color="#e74c3c",
+            width=90
+        )
+        self.delete_button.pack(side="left", padx=(0, 5))
+        
+        self.cancel_button = ctk.CTkButton(
+            self.button_frame,
+            text="Отмена",
+            command=self.destroy,
+            fg_color="gray",
+            width=90
+        )
+        self.cancel_button.pack(side="left", padx=5)
+        
+        self.save_button = ctk.CTkButton(
+            self.button_frame,
+            text="Сохранить",
+            command=self.save_changes,
+            width=90
+        )
+        self.save_button.pack(side="right", padx=(5, 0))
+    
+    def save_changes(self):
+        """Сохранение изменений"""
+        full_name = self.name_entry.get().strip()
+        phone = self.phone_entry.get().strip()
+        email = self.email_entry.get().strip()
+
+        # Валидация ФИО
+        if not full_name:
+            messagebox.showerror("Ошибка", "ФИО гостя не может быть пустым.", parent=self)
+            self.name_entry.focus()
+            return
+
+        # Валидация телефона
+        if phone and not validate_phone(phone):
+            messagebox.showerror(
+                "Ошибка", 
+                "Некорректный формат телефона.\nИспользуйте: +7XXXXXXXXXX или 8XXXXXXXXXX", 
+                parent=self
+            )
+            self.phone_entry.focus()
+            return
+        
+        # Валидация email
+        if email and not validate_email(email):
+            messagebox.showerror(
+                "Ошибка", 
+                "Некорректный формат email.", 
+                parent=self
+            )
+            self.email_entry.focus()
+            return
+
+        # Форматируем телефон
+        if phone:
+            phone = format_phone(phone)
+        
+        try:
+            # Обновление данных
+            self.db.cursor.execute(
+                "UPDATE guests SET full_name = ?, phone_number = ?, email = ? WHERE id = ?",
+                (full_name, phone, email, self.guest_data[0])
+            )
+            self.db.conn.commit()
+            
+            messagebox.showinfo("Успех", "Данные гостя обновлены", parent=self)
+            self.on_close_callback()
+            self.destroy()
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Не удалось сохранить изменения: {e}", parent=self)
+    
+    def delete_guest(self):
+        """Удаление гостя"""
+        # Проверяем наличие активных броней
+        self.db.cursor.execute(
+            "SELECT COUNT(*) FROM bookings WHERE guest_id = ? AND status = ?",
+            (self.guest_data[0], self.db.BOOKING_STATUS_ACTIVE)
+        )
+        active_bookings = self.db.cursor.fetchone()[0]
+        
+        if active_bookings > 0:
+            messagebox.showerror(
+                "Ошибка",
+                f"Нельзя удалить гостя с активными бронированиями!\n"
+                f"Активных броней: {active_bookings}",
+                parent=self
+            )
+            return
+        
+        if messagebox.askyesno(
+            "Подтверждение",
+            f"Вы уверены, что хотите удалить гостя '{self.guest_data[1]}'?\n"
+            "Это действие нельзя отменить!",
+            parent=self
+        ):
+            try:
+                self.db.cursor.execute("DELETE FROM guests WHERE id = ?", (self.guest_data[0],))
+                self.db.conn.commit()
+                
+                messagebox.showinfo("Успех", "Гость удален", parent=self)
+                self.on_close_callback()
+                self.destroy()
+            except Exception as e:
+                messagebox.showerror("Ошибка", f"Не удалось удалить гостя: {e}", parent=self)
+
+
 class AddGuestDialog(ctk.CTkToplevel):
     def __init__(self, master, db, on_close_callback):
         super().__init__(master)
@@ -243,8 +408,40 @@ class GuestsFrame(ctk.CTkFrame):
         vsb.grid(row=0, column=1, sticky="ns")
         hsb.grid(row=1, column=0, sticky="ew")
         
-        # Двойной клик для просмотра деталей
-        self.tree.bind("<Double-1>", self.show_guest_details)
+        # Контекстное меню (правая кнопка мыши)
+        self.tree.bind("<Button-3>", self.show_context_menu)
+        # Двойной клик для редактирования
+        self.tree.bind("<Double-1>", self.open_edit_guest_dialog)
+        
+        # --- Панель действий ---
+        self.action_bar = ctk.CTkFrame(self, fg_color="transparent")
+        self.action_bar.grid(row=3, column=0, sticky="ew", padx=10, pady=(0, 10))
+        
+        self.edit_button = ctk.CTkButton(
+            self.action_bar,
+            text="Редактировать",
+            command=self.open_edit_guest_dialog,
+            fg_color="#3498db",
+            width=120
+        )
+        self.edit_button.pack(side="left", padx=5)
+        
+        self.delete_button = ctk.CTkButton(
+            self.action_bar,
+            text="Удалить",
+            command=self.delete_guest,
+            fg_color="#e74c3c",
+            width=120
+        )
+        self.delete_button.pack(side="left", padx=5)
+        
+        self.refresh_button = ctk.CTkButton(
+            self.action_bar,
+            text="Обновить",
+            command=self.refresh_guests_table,
+            width=100
+        )
+        self.refresh_button.pack(side="right", padx=5)
         
         self.refresh_guests_table()
     
@@ -252,6 +449,119 @@ class GuestsFrame(ctk.CTkFrame):
         """Очистка поиска"""
         self.search_entry.delete(0, 'end')
         self.refresh_guests_table()
+    
+    def show_context_menu(self, event):
+        """Показать контекстное меню (правая кнопка мыши)"""
+        item = self.tree.identify_row(event.y)
+        if item:
+            self.tree.selection_set(item)
+            
+            # Создаем всплывающее меню
+            menu = ctk.CTkToplevel(self)
+            menu.withdraw()
+            menu.overrideredirect(True)
+            
+            ctk.CTkButton(
+                menu, 
+                text="📝 Редактировать", 
+                command=lambda: [self.open_edit_guest_dialog(), menu.destroy()],
+                fg_color="#3498db",
+                anchor="w"
+            ).pack(fill="x", padx=2, pady=2)
+            
+            ctk.CTkButton(
+                menu, 
+                text="ℹ️ Информация", 
+                command=lambda: [self.show_guest_details(None), menu.destroy()],
+                fg_color="gray",
+                anchor="w"
+            ).pack(fill="x", padx=2, pady=2)
+            
+            # Разделитель
+            ctk.CTkFrame(menu, height=2, fg_color="#555").pack(fill="x", padx=5, pady=3)
+            
+            ctk.CTkButton(
+                menu, 
+                text="🗑️ Удалить", 
+                command=lambda: [self.delete_guest(), menu.destroy()],
+                fg_color="#e74c3c",
+                anchor="w"
+            ).pack(fill="x", padx=2, pady=2)
+            
+            menu.deiconify()
+            menu.geometry(f"+{event.x_root}+{event.y_root}")
+            menu.bind("<FocusOut>", lambda e: menu.destroy())
+            menu.focus_set()
+    
+    def open_edit_guest_dialog(self, event=None):
+        """Открыть диалог редактирования гостя"""
+        selection = self.tree.selection()
+        if not selection:
+            if event is None:  # Вызвано кнопкой, а не двойным кликом
+                messagebox.showwarning(
+                    "Предупреждение",
+                    "Выберите гостя для редактирования",
+                    parent=self
+                )
+            return
+        
+        values = self.tree.item(selection[0])['values']
+        
+        # Получаем полные данные из БД
+        self.db.cursor.execute(
+            "SELECT id, full_name, phone_number, email FROM guests WHERE id = ?",
+            (values[0],)
+        )
+        guest_data = self.db.cursor.fetchone()
+        
+        if guest_data:
+            EditGuestDialog(self, self.db, guest_data, on_close_callback=self.refresh_guests_table)
+    
+    def delete_guest(self):
+        """Удалить гостя"""
+        selection = self.tree.selection()
+        if not selection:
+            messagebox.showwarning(
+                "Предупреждение",
+                "Выберите гостя для удаления",
+                parent=self
+            )
+            return
+        
+        values = self.tree.item(selection[0])['values']
+        guest_id = values[0]
+        guest_name = values[1]
+        
+        # Проверяем наличие активных броней
+        self.db.cursor.execute(
+            "SELECT COUNT(*) FROM bookings WHERE guest_id = ? AND status = ?",
+            (guest_id, self.db.BOOKING_STATUS_ACTIVE)
+        )
+        active_bookings = self.db.cursor.fetchone()[0]
+        
+        if active_bookings > 0:
+            messagebox.showerror(
+                "Ошибка",
+                f"Нельзя удалить гостя с активными бронированиями!\n"
+                f"Активных броней: {active_bookings}",
+                parent=self
+            )
+            return
+        
+        if messagebox.askyesno(
+            "Подтверждение",
+            f"Вы уверены, что хотите удалить гостя '{guest_name}'?\n"
+            "Это действие нельзя отменить!",
+            parent=self
+        ):
+            try:
+                self.db.cursor.execute("DELETE FROM guests WHERE id = ?", (guest_id,))
+                self.db.conn.commit()
+                
+                messagebox.showinfo("Успех", "Гость удален", parent=self)
+                self.refresh_guests_table()
+            except Exception as e:
+                messagebox.showerror("Ошибка", f"Не удалось удалить гостя: {e}", parent=self)
     
     def show_guest_details(self, event):
         """Показать детали гостя"""
@@ -261,12 +571,31 @@ class GuestsFrame(ctk.CTkFrame):
         
         values = self.tree.item(selection[0])['values']
         
+        # Получаем историю броней
+        self.db.cursor.execute(
+            """SELECT COUNT(*) FROM bookings 
+               WHERE guest_id = ? AND status = ?""",
+            (values[0], self.db.BOOKING_STATUS_ACTIVE)
+        )
+        active_bookings = self.db.cursor.fetchone()[0]
+        
+        self.db.cursor.execute(
+            """SELECT COUNT(*) FROM bookings 
+               WHERE guest_id = ?""",
+            (values[0],)
+        )
+        total_bookings = self.db.cursor.fetchone()[0]
+        
         details = f"""
 Гость #{values[0]}
 {'='*40}
 ФИО: {values[1]}
 Телефон: {values[2] or 'Не указан'}
 Email: {values[3] or 'Не указан'}
+
+История бронирований:
+  • Всего броней: {total_bookings}
+  • Активных: {active_bookings}
         """
         
         messagebox.showinfo("Информация о госте", details.strip(), parent=self)
